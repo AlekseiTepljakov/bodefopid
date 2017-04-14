@@ -22,16 +22,16 @@ function varargout = bodefopid(varargin)
 
 % Edit the above text to modify the response to help bodefopid
 
-% Last Modified by GUIDE v2.5 03-Apr-2017 15:16:38
+% Last Modified by GUIDE v2.5 14-Apr-2017 17:04:04
 
 % Begin initialization code - DO NOT EDIT
 gui_Singleton = 1;
 gui_State = struct('gui_Name',       mfilename, ...
-                   'gui_Singleton',  gui_Singleton, ...
-                   'gui_OpeningFcn', @bodefopid_OpeningFcn, ...
-                   'gui_OutputFcn',  @bodefopid_OutputFcn, ...
-                   'gui_LayoutFcn',  [] , ...
-                   'gui_Callback',   []);
+    'gui_Singleton',  gui_Singleton, ...
+    'gui_OpeningFcn', @bodefopid_OpeningFcn, ...
+    'gui_OutputFcn',  @bodefopid_OutputFcn, ...
+    'gui_LayoutFcn',  [] , ...
+    'gui_Callback',   []);
 if nargin && ischar(varargin{1})
     gui_State.gui_Callback = str2func(varargin{1});
 end
@@ -77,7 +77,7 @@ set(hObject, 'UserData', ud);
 
 
 % --- Outputs from this function are returned to the command line.
-function varargout = bodefopid_OutputFcn(hObject, eventdata, handles) 
+function varargout = bodefopid_OutputFcn(hObject, eventdata, handles)
 % varargout  cell array for returning output args (see VARARGOUT);
 % hObject    handle to figure
 % eventdata  reserved - to be defined in a future version of MATLAB
@@ -604,367 +604,451 @@ if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgr
 end
 
 % --- Get dynamic system
-function [G,C,K,Kp,Ki,Kd] = fcdd_get_system(handles)
+function [G,C,K,Kp,Ki,Kd,lam,mu] = fcdd_get_system(handles)
+
+% The transfer function
+K = str2double(get(handles.txtK, 'string'));
+p.K = K;
+[b,nb] = str2poly(get(handles.txtZ, 'string'), p);
+[a,na] = str2poly(get(handles.txtP, 'string'), p);
+G = fotf(a,na,b,nb);
+
+% Is there a delay?
+myDelay = str2double(get(handles.txtL, 'string'));
+if myDelay < 0
+    set(handles.txtL, 'string', '0');
+    warning('Input-output delay cannot be negative');
+    myDelay = 0;
+end
+
+if myDelay > 0
+    G.ioDelay = myDelay;
+end
+
+% The controller
+s=fotf('s');
+Kp = str2double(get(handles.txtKp, 'string'));
+Ki = str2double(get(handles.txtKi, 'string'));
+Kd = str2double(get(handles.txtKd, 'string'));
+lam = str2double(get(handles.txtLam, 'string'));
+mu = str2double(get(handles.txtMu, 'string'));
+C = Kp + Ki/(s^lam) + Kd*s^mu;
+
+% Check if system needs to be approximated
+sel = get(handles.menuSimulation, 'Value');
+switch sel
+    case 1
+        appr = false;
+    case 2
+        appr = true;
+        met = 'oust';
+    case 3
+        appr = true;
+        met = 'ref';
+    otherwise
+        appr = false;
+end
+
+if appr
+    wa = str2num(get(handles.txtW, 'string'));
+    Na = str2num(get(handles.txtN, 'string'));
     
-    % The transfer function
-    K = str2double(get(handles.txtK, 'string'));
-    p.K = K;
-    b = str1poly(get(handles.txtZ, 'string'), p);
-    a = str1poly(get(handles.txtP, 'string'), p);
-    G = tf(b,a);
-    
-    % Is there a delay?
-    myDelay = str2double(get(handles.txtL, 'string'));
-    if myDelay < 0
-        set(handles.txtL, 'string', '0');
-        warning('Input-output delay cannot be negative');
-        myDelay = 0;
-    end
-    
-    if myDelay > 0
-        G.ioDelay = myDelay;
-    end
-    
-    % The controller
-    s=tf('s');
-    Kp = str2double(get(handles.txtKp, 'string'));
-    Ki = str2double(get(handles.txtKi, 'string'));
-    Kd = str2double(get(handles.txtKd, 'string'));
-    C = Kp + Ki/s + Kd*s;
+    % Return approximated systems instead of FOTF objects
+    G = oustapp(G,wa(1),wa(2),Na,met);
+    C = oustapp(C,wa(1),wa(2),Na,met);
+end
 
 % --- Create the system and do the plot
 function fcdd_plot_responses(handles)
 
-    % Get handle object
-    hObject = handles.output;
-    
-    % Get user data
-    ud = get(hObject, 'UserData');
-    fh = ud.figureHandle;
-    
-    % Do log?
-    doLog = ud.log;
-    doOldPlot = 0;
-    
-    % Save vars to workspace?
-    doUpdWorkspace = ud.upd_workspace;
-    
-    % Create a figure if it doesn't exist
-    if isempty(fh) || ~ishandle(fh)
-        h = figure;
-    else
-        h = fh;
-        ud = get(h, 'UserData');
-        history = ud.history;
-        doOldPlot = 1;
-    end
-    
-    % Get necessary values if history exists
-    if doOldPlot
-       y_old = history.y;
-       u_old = history.u;
-       t_old = history.t;
-       w_old = history.w;
-       r_old = history.r; 
-       p_old = history.p;
-       G_old = history.G;
-       C_old = history.C;
-    end
-    
-    udGui = struct;
-    
-    % Save for later
-    udGui.figureHandle = h;
-    udGui.log = doLog;
-    udGui.upd_workspace = doUpdWorkspace;
-    
-    % Get control system
-    [G, C, K, Kp, Ki, Kd] = fcdd_get_system(handles);
-    
-    % Check the delay parameter
-    hasDelay = 0;
-    if ~isempty(G.ioDelay) && G.ioDelay > 0
-        hasDelay = 1;
-    end
-    
-    history.G = G;
-    history.hasDelay = hasDelay;
-    history.C = C;
-    
-    % Closed loop system step response
+% Get handle object
+hObject = handles.output;
+
+% Get user data
+ud = get(hObject, 'UserData');
+fh = ud.figureHandle;
+
+% Do log?
+doLog = ud.log;
+doOldPlot = 0;
+
+% Save vars to workspace?
+doUpdWorkspace = ud.upd_workspace;
+
+% Create a figure if it doesn't exist
+if isempty(fh) || ~ishandle(fh)
+    h = figure;
+else
+    h = fh;
+    ud = get(h, 'UserData');
+    history = ud.history;
+    doOldPlot = 1;
+end
+
+% Get necessary values if history exists
+if doOldPlot
+    y_old = history.y;
+    u_old = history.u;
+    t_old = history.t;
+    w_old = history.w;
+    r_old = history.r;
+    p_old = history.p;
+    G_old = history.G;
+    C_old = history.C;
+end
+
+udGui = struct;
+
+% Save for later
+udGui.figureHandle = h;
+udGui.log = doLog;
+udGui.upd_workspace = doUpdWorkspace;
+
+% Get control system
+[G, C, K, Kp, Ki, Kd, lam, mu] = fcdd_get_system(handles);
+
+% Check the delay parameter
+hasDelay = 0;
+if ~isempty(G.ioDelay) && G.ioDelay > 0
+    hasDelay = 1;
+end
+
+%% Check simulation type
+simul = get(handles.menuSimulation, 'Value');
+
+history.G = G;
+history.hasDelay = hasDelay;
+history.C = C;
+
+% Closed loop system step response
+if hasDelay && simul == 1
+    Gnd = G; Gnd.ioDelay = 0;
+    CL = feedback(C*Gnd,1);
+    CL.ioDelay = G.ioDelay;
+    warning('Feedback system modified: IO delay moved to input. Simulation results may be inaccurate. Choose an approximation method instead.');
+else
     CL = feedback(C*G,1);
-    
-    % Check whether system is proper. If not, hard fault.
-    if ~isproper(CL)
-        close(h);
-        errordlg(['Control system model is not proper.' ... 
-            'It has more zeros than poles and cannot be simulated.']);
-        return;
-    end
-    
+end
+
+% Check whether system is proper. If not, hard fault.
+if (simul ~= 1 && ~isproper(CL))
+    close(h);
+    errordlg(['Control system model is not proper.' ...
+        'It has more zeros than poles and cannot be simulated.']);
+    return;
+end
+
+if simul == 1
+    t = str2num(get(handles.txtT, 'string'));
+    y = step(CL,t);
+else
     [y, t] = step(CL);
+end
 
-    u = zeros(length(t));
-    
-    % Also get control law ONLY if C/(1+CG) system is proper
+u = zeros(length(t));
+
+% Also get control law ONLY if C/(1+CG) system is proper
+if hasDelay && simul == 1
+    Gnd = G; Gnd.ioDelay = 0;
+    CLU = C / (1+C*Gnd);
+    CLU.ioDelay = G.ioDelay;
+    warning('Feedback system modified: IO delay moved to input. Simulation results may be inaccurate. Choose an approximation method instead.');
+else
     CLU = C / (1+C*G);
+end
+
+if simul == 1
+    isControlProper = 1;
+else
     isControlProper = isproper(CLU);
-    
-    % t1 serves as the second non-uniform time vector in case of
-    % systems with time delays, but is the same as t otherwise.
-    t1 = t;
-    if isControlProper
-        if hasDelay
-            [u, t1] = step(CLU);
-        else
+end
+
+% t1 serves as the second non-uniform time vector in case of
+% systems with time delays, but is the same as t otherwise.
+t1 = t;
+if isControlProper
+    if hasDelay
+        if simul == 1
             u = step(CLU,t1);
+        else
+            [u, t1] = step(CLU);
         end
-    end
-    
-    % Save for later
-    history.y = y;
-    history.t = t;
-    history.u = u;
-    
-    % Save for context menu
-    u_data = struct;
-    u_data.t = t1;
-    u_data.u = u;
-
-    % Open loop frequency response
-    [r,w] = freqresp(C*G);
-    
-    % Convert to single dimension
-    r = r(:);
-    w = w(:);
-    
-    history.r = r;
-    history.w = w;
-    
-    % Closed loop poles (without regard to delay)
-    G_nd = G;
-    G_nd.ioDelay = [];
-    CL_nd = feedback(C*G_nd,1);
-    
-    [b, a] = tfdata(CL_nd, 'v');
-    p = roots(a);
-    history.p = p;
-    
-    % Set current figure and clear it
-    figure(h);
-    clf(h);
-    
-    % Do the plots
-    oldPlotColor = [0.7 0.7 0.7];
-    newPlotColor = [0 0 1];
-    
-    % Time domain
-    h1 = subplot(4,2,[2 4]);
-    if doOldPlot
-        
-        % Simulate over for longer time IF system doesn't have a delay
-        if ~hasDelay
-            t_max = max(max(t), max(t_old)); % Longest time
-            numPts = max(length(t), length(t_old)); % Max length
-            t_st = t_max / numPts;
-            t_new = 0:t_st:t_max;
-        
-            % New responses
-            t = t_new;
-            y = step(feedback(C*G,1), t_new);
-        
-            t_old = t;
-            y_old = step(feedback(C_old*G_old,1), t_new);
-            
-        end
-        
-        plot(t_old,y_old,'Color',oldPlotColor,'LineWidth',2);
-        hold on;
-    end
-    
-    % Add context menu for control law, if corresponding system is proper
-    if isControlProper
-        cmenu = uicontextmenu;
-        set(h1, 'UIContextMenu', cmenu);
-        m1 = uimenu(cmenu, 'Label', 'Show control law', 'Callback', ...
-            @fcdd_draw_control_law, 'UserData', u_data);
-    end
-    
-    % Get some info on step
-    S = stepinfo(y,t,y(end));
-    
-    % Form some nice analysis text
-    titleText = ['Step resp.; Settl.t: ' ...
-        num2str(S.SettlingTime) 's, Ovsht: ' num2str(S.Overshoot) '%'];
-    
-    plot(t,y,'Color',newPlotColor, 'LineWidth',2);
-    title(titleText);
-    xlim('auto');
-    
-    xlims = get(gca, 'xlim');
-    
-    % Plot reference
-    hold on;
-    plot(xlims, [1 1], ':r', 'LineWidth', 2);
-
-    % Produce a legend
-    if doOldPlot
-        legend('Prev. response', 'Cur. response', ...
-            'Reference', 'Location', 'best');
     else
-        legend('Prev. response', 'Reference', 'Location', 'best');
+        u = step(CLU,t1);
     end
-    
-    % Correct the limits a little
-    ylims = get(gca, 'ylim');
-    ylim([ylims(1)-0.5 ylims(2)+0.5]);
-    
-    grid;
-    ylabel('Amplitude');
-    
-    % If history exists, recompute the frequency domain characteristics
-    if doOldPlot
-       w_min = min(min(w), min(w_old));
-       w_max = max(max(w), max(w_old));
-       numPts = max(length(w), length(w_old));
-       w_new = logspace(log10(w_min), log10(w_max), numPts);
-       
-       w = w_new;
-       r = freqresp(C*G, w);
-       r = r(:);
+end
 
-       w_old = w_new;
-       r_old = freqresp(C_old*G_old, w);
-       r_old = r_old(:);
-       
-       r_db_old = 20*log10(abs(r_old));
-       r_deg_old = rad2deg(angle(r_old));
+% Save for later
+history.y = y;
+history.t = t;
+history.u = u;
+
+% Save for context menu
+u_data = struct;
+u_data.t = t1;
+u_data.u = u;
+
+% Open loop frequency response
+[r,w] = freqresp(C*G);
+
+% Convert to single dimension
+r = r(:);
+w = w(:);
+
+history.r = r;
+history.w = w;
+
+% Closed loop poles (without regard to delay)
+G_nd = G;
+C_nd = C;
+G_nd.ioDelay = [];
+
+if simul == 1
+    G_nd = oustapp(G_nd);
+    C_nd = oustapp(C_nd);
+end
+
+CL_nd = feedback(C_nd*G_nd,1);
+
+[b, a] = tfdata(CL_nd, 'v');
+p = roots(a);
+history.p = p;
+
+% Set current figure and clear it
+figure(h);
+clf(h);
+
+% Do the plots
+oldPlotColor = [0.7 0.7 0.7];
+newPlotColor = [0 0 1];
+
+% Time domain
+h1 = subplot(4,2,[2 4]);
+if doOldPlot
+    
+    % Simulate over for longer time IF system doesn't have a delay
+    if ~hasDelay
+        t_max = max(max(t), max(t_old)); % Longest time
+        numPts = max(length(t), length(t_old)); % Max length
+        t_st = t_max / numPts;
+        t_new = 0:t_st:t_max;
+        
+        % Closed loop system step response
+        if hasDelay && simul == 1
+            
+            Gnd1 = G; Gnd1.ioDelay = 0;
+            CL1 = feedback(C*Gnd1,1);
+            Gnd1.ioDelay = G.ioDelay;
+            
+            Gnd2 = G_old; Gnd2.ioDelay = 0;
+            CL2 = feedback(C_old*Gnd2,1);
+            CL2.ioDelay = G_old.ioDelay;
+            
+            warning('Feedback system modified: IO delay moved to input. Simulation results may be inaccurate. Choose an approximation method instead.');
+        else
+            CL1 = feedback(C*G,1);
+            CL2 = feedback(C_old*G_old,1);
+        end
+        
+        % New responses
+        t = t_new;
+        y = step(CL1, t_new);
+        
+        t_old = t;
+        y_old = step(CL2, t_new);
         
     end
     
-    % Frequency domain
-    r_db = 20*log10(abs(r));
-    r_deg = rad2deg(angle(r));
-    
-    % Get info on gm/pm
-    [Gm,Pm,wcg,wcp] = margin(C*G);
-    
-    % Some nice text
-    titleText = ['Bode plot. Gm: ' num2str(Gm) ...
-        ' dB; pm: ' num2str(Pm) ' deg.'];
-    
-    % Gain plot
-    h2 = subplot(4,2,[1 3]);
-    if doOldPlot
-        semilogx(w_old, r_db_old, 'Color', oldPlotColor, 'LineWidth', 2);
-        hold on;
-    end
-    semilogx(w, r_db, 'Color', newPlotColor, 'LineWidth', 2);
-    ylabel('Magn. [dB]');
-    title(titleText);
-    
-    % Plot gain/phase margins
-    ylims = get(gca,'ylim');
-    if ~isnan(wcg)
-        hold on;
-        semilogx([wcg wcg], ylims, 'k', 'LineWidth', 2);
-    end
-    
-    if ~isnan(wcp)
-        hold on;
-        semilogx([wcp wcp], ylims, 'r', 'LineWidth', 2);
-    end
-    
-    grid;
+    plot(t_old,y_old,'Color',oldPlotColor,'LineWidth',2);
+    hold on;
+end
 
-    % Phase plot
-    h3 = subplot(4,2,[5 7]);
-    if doOldPlot
-        semilogx(w_old, r_deg_old, 'Color', oldPlotColor, 'LineWidth', 2);
-        hold on;
-    end
-    semilogx(w, r_deg, 'Color', newPlotColor, 'LineWidth', 2);
-    linkaxes([h2,h3],'x');
-    xlim('auto');
-    xlabel('Frequency [rad/s]');
-    ylabel('Ph.angle [deg]');
+% Add context menu for control law, if corresponding system is proper
+if isControlProper
+    cmenu = uicontextmenu;
+    set(h1, 'UIContextMenu', cmenu);
+    m1 = uimenu(cmenu, 'Label', 'Show control law', 'Callback', ...
+        @fcdd_draw_control_law, 'UserData', u_data);
+end
+
+% Get some info on step
+S = stepinfo(y,t,y(end));
+
+% Form some nice analysis text
+titleText = ['Step resp.; Settl.t: ' ...
+    num2str(S.SettlingTime) 's, Ovsht: ' num2str(S.Overshoot) '%'];
+
+plot(t,y,'Color',newPlotColor, 'LineWidth',2);
+title(titleText);
+xlim('auto');
+
+xlims = get(gca, 'xlim');
+
+% Plot reference
+hold on;
+plot(xlims, [1 1], ':r', 'LineWidth', 2);
+
+% Produce a legend
+if doOldPlot
+    legend('Prev. response', 'Cur. response', ...
+        'Reference', 'Location', 'best');
+else
+    legend('Prev. response', 'Reference', 'Location', 'best');
+end
+
+% Correct the limits a little
+ylims = get(gca, 'ylim');
+ylim([ylims(1)-0.5 ylims(2)+0.5]);
+
+grid;
+ylabel('Amplitude');
+
+% If history exists, recompute the frequency domain characteristics
+if doOldPlot
+    w_min = min(min(w), min(w_old));
+    w_max = max(max(w), max(w_old));
+    numPts = max(length(w), length(w_old));
+    w_new = logspace(log10(w_min), log10(w_max), numPts);
     
-    % Plot gain/phase margins
-    ylims = get(gca,'ylim');
-    if ~isnan(wcg)
-        hold on;
-        semilogx([wcg wcg], ylims, 'k', 'LineWidth', 2);
-    end
+    w = w_new;
+    r = freqresp(C*G, w);
+    r = r(:);
+    
+    w_old = w_new;
+    r_old = freqresp(C_old*G_old, w);
+    r_old = r_old(:);
+    
+    r_db_old = 20*log10(abs(r_old));
+    r_deg_old = rad2deg(angle(r_old));
+    
+end
+
+% Frequency domain
+r_db = 20*log10(abs(r));
+r_deg = rad2deg(angle(r));
+
+% Get info on gm/pm
+[Gm,Pm,wcg,wcp] = margin(C*G);
+
+% Some nice text
+titleText = ['Bode plot. Gm: ' num2str(Gm) ...
+    ' dB; pm: ' num2str(Pm) ' deg.'];
+
+% Gain plot
+h2 = subplot(4,2,[1 3]);
+if doOldPlot
+    semilogx(w_old, r_db_old, 'Color', oldPlotColor, 'LineWidth', 2);
+    hold on;
+end
+semilogx(w, r_db, 'Color', newPlotColor, 'LineWidth', 2);
+ylabel('Magn. [dB]');
+title(titleText);
+
+% Plot gain/phase margins
+ylims = get(gca,'ylim');
+if ~isnan(wcg)
+    hold on;
+    semilogx([wcg wcg], ylims, 'k', 'LineWidth', 2);
+end
+
+if ~isnan(wcp)
+    hold on;
+    semilogx([wcp wcp], ylims, 'r', 'LineWidth', 2);
+end
+
+grid;
+
+% Phase plot
+h3 = subplot(4,2,[5 7]);
+if doOldPlot
+    semilogx(w_old, r_deg_old, 'Color', oldPlotColor, 'LineWidth', 2);
+    hold on;
+end
+semilogx(w, r_deg, 'Color', newPlotColor, 'LineWidth', 2);
+linkaxes([h2,h3],'x');
+xlim('auto');
+xlabel('Frequency [rad/s]');
+ylabel('Ph.angle [deg]');
+
+% Plot gain/phase margins
+ylims = get(gca,'ylim');
+if ~isnan(wcg)
+    hold on;
+    semilogx([wcg wcg], ylims, 'k', 'LineWidth', 2);
+end
+
+if ~isnan(wcp)
+    hold on;
+    semilogx([wcp wcp], ylims, 'r', 'LineWidth', 2);
+end
+
+grid;
+
+% Pole plot
+h4 = subplot(4,2,[6 8]);
+if doOldPlot
+    plot(real(p_old),imag(p_old),'x','Color',oldPlotColor,'LineWidth',2);
+    hold on;
+end
+plot(real(p), imag(p), 'x', 'Color', newPlotColor, 'LineWidth', 2);
+grid;
+xlabel('Real');
+ylabel('Imag');
+title('Approx.cl.loop poles (sys. w/o delay)');
+
+% Correct the limits a little
+xlims = get(gca, 'xlim');
+ylims = get(gca, 'ylim');
+xlim(xlims + [-0.5 0.5]);
+ylim(ylims + [-0.5 0.5]);
+
+% Output log
+if doLog
+    plantText = ['For plant G with K = ' num2str(K)];
+    disp(plantText);
+    
+    controlText = ['with controller Kp=' num2str(Kp) ...
+        ', Ki=' num2str(Ki) ', Kd=' num2str(Kd) ...
+        ', lam=' num2str(lam) ', mu=' num2str(mu)];
+    disp(controlText);
     
     if ~isnan(wcp)
-        hold on;
-        semilogx([wcp wcp], ylims, 'r', 'LineWidth', 2);
-    end
-    
-    grid;
-    
-    % Pole plot
-    h4 = subplot(4,2,[6 8]);
-    if doOldPlot
-        plot(real(p_old),imag(p_old),'x','Color',oldPlotColor,'LineWidth',2);
-        hold on;
-    end
-    plot(real(p), imag(p), 'x', 'Color', newPlotColor, 'LineWidth', 2);
-    grid;
-    xlabel('Real');
-    ylabel('Imag');
-    title('Cl.loop poles (sys. w/o delay)');
-    
-    % Correct the limits a little
-    xlims = get(gca, 'xlim');
-    ylims = get(gca, 'ylim');
-    xlim(xlims + [-0.5 0.5]);
-    ylim(ylims + [-0.5 0.5]);
-    
-    % Output log
-    if doLog
-       plantText = ['For plant G with K = ' num2str(K)];
-       disp(plantText);
-       
-       controlText = ['with controller Kp=' num2str(Kp) ...
-           ', Ki=' num2str(Ki) ', Kd=' num2str(Kd)];
-       disp(controlText);
-       
-       if ~isnan(wcp)
         margin1Text = ['Phase margin: ' num2str(Pm) ' deg at freq. ' ...
             num2str(wcp) ' rad/s'];
         disp(margin1Text);
-       end
-       
-       if ~isnan(wcg)
+    end
+    
+    if ~isnan(wcg)
         margin2Text = ['Gain margin: ' num2str(Pm) ' dB at freq. ' ...
             num2str(wcg) ' rad/s'];
         disp(margin2Text);
-       end
-       
-       controlQText = ['Settling time: ' num2str(S.SettlingTime) 's and ' ...
-           'Percent overshoot: ' num2str(S.Overshoot) '%'];
-       disp(controlQText);
-       disp('----------------');
-       
     end
     
-    % Update workspace
-    if doUpdWorkspace
-       assignin('base', 'Kp', Kp); 
-       assignin('base', 'Ki', Ki);
-       assignin('base', 'Kd', Kd);
-       assignin('base', 'K', K);
-       assignin('base', 'C', C);
-       assignin('base', 'G', G);
-    end
+    controlQText = ['Settling time: ' num2str(S.SettlingTime) 's and ' ...
+        'Percent overshoot: ' num2str(S.Overshoot) '%'];
+    disp(controlQText);
+    disp('----------------');
     
-    % Save new user data
-    set(hObject, 'UserData', udGui);
-    ud.history = history;
-    set(h, 'UserData', ud);
-    set(h, 'Name', 'Control system simulation', 'NumberTitle', 'off');
-    
+end
+
+% Update workspace
+if doUpdWorkspace
+    assignin('base', 'Kp', Kp);
+    assignin('base', 'Ki', Ki);
+    assignin('base', 'Kd', Kd);
+    assignin('base', 'lambda', lam);
+    assignin('base', 'mu', mu);
+    assignin('base', 'K', K);
+    assignin('base', 'C', C);
+    assignin('base', 'G', G);
+end
+
+% Save new user data
+set(hObject, 'UserData', udGui);
+ud.history = history;
+set(h, 'UserData', ud);
+set(h, 'Name', 'Control system simulation', 'NumberTitle', 'off');
+
 
 
 function txtL_Callback(hObject, eventdata, handles)
@@ -1005,43 +1089,43 @@ function menuLog_Callback(hObject, eventdata, handles)
 h = handles.output;
 ud = get(h, 'UserData');
 if strcmpi(get(handles.menuLog, 'Checked'), 'on')
-   set(handles.menuLog, 'Checked', 'off');
-   ud.log = 0;
+    set(handles.menuLog, 'Checked', 'off');
+    ud.log = 0;
 else
-   set(handles.menuLog, 'Checked', 'on');
-   ud.log = 1;
+    set(handles.menuLog, 'Checked', 'on');
+    ud.log = 1;
 end
 set(h, 'UserData', ud);
 
 % Draw the control law
 function fcdd_draw_control_law(source, callbackdata)
-    
-    % Get data
-    u_data = get(source, 'UserData');
-    u = u_data.u;
-    t = u_data.t;
-    
-    % Produce figure
-    h = figure;
-    plot(t, u, 'r', 'LineWidth', 2);
-    title('Current control law');
-    ylabel('Amplitude');
-    xlabel('Time');
-    set(h, 'Name', 'Control law', 'NumberTitle', 'off');
-    grid;
-    
+
+% Get data
+u_data = get(source, 'UserData');
+u = u_data.u;
+t = u_data.t;
+
+% Produce figure
+h = figure;
+plot(t, u, 'r', 'LineWidth', 2);
+title('Current control law');
+ylabel('Amplitude');
+xlabel('Time');
+set(h, 'Name', 'Control law', 'NumberTitle', 'off');
+grid;
+
 % Resample t vector if it is nonuniform using minimum step by default
 % Method for choosing step can also be "mean", "max", etc.
 function t_new = fcdd_resample_t(t, method)
-    % Check that a default method is set
-    if nargin < 2
-        method = 'min'; % Exact method but very slow
-    end
-    
-    fun_method = str2func(method);
-    
-    t_dif = fun_method(diff(t));
-    t_new = 0:t_dif:max(t);
+% Check that a default method is set
+if nargin < 2
+    method = 'min'; % Exact method but very slow
+end
+
+fun_method = str2func(method);
+
+t_dif = fun_method(diff(t));
+t_new = 0:t_dif:max(t);
 
 
 % --------------------------------------------------------------------
@@ -1060,11 +1144,11 @@ function menuUpdWorkspace_Callback(hObject, eventdata, handles)
 h = handles.output;
 ud = get(h, 'UserData');
 if strcmpi(get(handles.menuUpdWorkspace, 'Checked'), 'on')
-   set(handles.menuUpdWorkspace, 'Checked', 'off');
-   ud.upd_workspace = 0;
+    set(handles.menuUpdWorkspace, 'Checked', 'off');
+    ud.upd_workspace = 0;
 else
-   set(handles.menuUpdWorkspace, 'Checked', 'on');
-   ud.upd_workspace = 1;
+    set(handles.menuUpdWorkspace, 'Checked', 'on');
+    ud.upd_workspace = 1;
 end
 set(h, 'UserData', ud);
 
@@ -1115,18 +1199,22 @@ end
 
 
 % --- Executes on slider movement.
-function slider9_Callback(hObject, eventdata, handles)
-% hObject    handle to slider9 (see GCBO)
+function sldLam_Callback(hObject, eventdata, handles)
+% hObject    handle to sldLam (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
 % Hints: get(hObject,'Value') returns position of slider
 %        get(hObject,'Min') and get(hObject,'Max') to determine range of slider
+valLam = get(handles.sldLam, 'value');
+set(handles.txtLam, 'string', num2str(valLam));
+drawnow;
+fcdd_plot_responses(handles);
 
 
 % --- Executes during object creation, after setting all properties.
-function slider9_CreateFcn(hObject, eventdata, handles)
-% hObject    handle to slider9 (see GCBO)
+function sldLam_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to sldLam (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    empty - handles not created until after all CreateFcns called
 
@@ -1137,18 +1225,18 @@ end
 
 
 
-function edit24_Callback(hObject, eventdata, handles)
-% hObject    handle to edit24 (see GCBO)
+function txtLam_Callback(hObject, eventdata, handles)
+% hObject    handle to txtLam (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
-% Hints: get(hObject,'String') returns contents of edit24 as text
-%        str2double(get(hObject,'String')) returns contents of edit24 as a double
+% Hints: get(hObject,'String') returns contents of txtLam as text
+%        str2double(get(hObject,'String')) returns contents of txtLam as a double
 
 
 % --- Executes during object creation, after setting all properties.
-function edit24_CreateFcn(hObject, eventdata, handles)
-% hObject    handle to edit24 (see GCBO)
+function txtLam_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to txtLam (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    empty - handles not created until after all CreateFcns called
 
@@ -1167,7 +1255,10 @@ function sldMu_Callback(hObject, eventdata, handles)
 
 % Hints: get(hObject,'Value') returns position of slider
 %        get(hObject,'Min') and get(hObject,'Max') to determine range of slider
-
+valMu = get(handles.sldMu, 'value');
+set(handles.txtMu, 'string', num2str(valMu));
+drawnow;
+fcdd_plot_responses(handles);
 
 % --- Executes during object creation, after setting all properties.
 function sldMu_CreateFcn(hObject, eventdata, handles)
@@ -1194,6 +1285,123 @@ function txtMu_Callback(hObject, eventdata, handles)
 % --- Executes during object creation, after setting all properties.
 function txtMu_CreateFcn(hObject, eventdata, handles)
 % hObject    handle to txtMu (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    empty - handles not created until after all CreateFcns called
+
+% Hint: edit controls usually have a white background on Windows.
+%       See ISPC and COMPUTER.
+if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgroundColor'))
+    set(hObject,'BackgroundColor','white');
+end
+
+
+% --- Executes on button press in btnOpenLoop.
+function btnOpenLoop_Callback(hObject, eventdata, handles)
+% hObject    handle to btnOpenLoop (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+
+
+% --- Executes on selection change in menuSimulation.
+function menuSimulation_Callback(hObject, eventdata, handles)
+% hObject    handle to menuSimulation (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+
+% Hints: contents = cellstr(get(hObject,'String')) returns menuSimulation contents as cell array
+%        contents{get(hObject,'Value')} returns selected item from menuSimulation
+
+% Enable or disable the approximation parameter selection
+sel = get(handles.menuSimulation, 'Value');
+switch sel
+    case 1
+        act = 'off';
+        act1 = 'on';
+    case {2,3}
+        act = 'on';
+        act1 = 'off';
+    otherwise
+        act = 'off';
+        act1 = 'on';
+end
+set(handles.txtW, 'Enable', act);
+set(handles.txtN, 'Enable', act);
+set(handles.txtT, 'Enable', act1);
+
+
+
+% --- Executes during object creation, after setting all properties.
+function menuSimulation_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to menuSimulation (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    empty - handles not created until after all CreateFcns called
+
+% Hint: popupmenu controls usually have a white background on Windows.
+%       See ISPC and COMPUTER.
+if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgroundColor'))
+    set(hObject,'BackgroundColor','white');
+end
+
+
+
+function txtW_Callback(hObject, eventdata, handles)
+% hObject    handle to txtW (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+
+% Hints: get(hObject,'String') returns contents of txtW as text
+%        str2double(get(hObject,'String')) returns contents of txtW as a double
+
+
+% --- Executes during object creation, after setting all properties.
+function txtW_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to txtW (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    empty - handles not created until after all CreateFcns called
+
+% Hint: edit controls usually have a white background on Windows.
+%       See ISPC and COMPUTER.
+if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgroundColor'))
+    set(hObject,'BackgroundColor','white');
+end
+
+
+
+function txtN_Callback(hObject, eventdata, handles)
+% hObject    handle to txtN (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+
+% Hints: get(hObject,'String') returns contents of txtN as text
+%        str2double(get(hObject,'String')) returns contents of txtN as a double
+
+
+% --- Executes during object creation, after setting all properties.
+function txtN_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to txtN (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    empty - handles not created until after all CreateFcns called
+
+% Hint: edit controls usually have a white background on Windows.
+%       See ISPC and COMPUTER.
+if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgroundColor'))
+    set(hObject,'BackgroundColor','white');
+end
+
+
+
+function txtT_Callback(hObject, eventdata, handles)
+% hObject    handle to txtT (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+
+% Hints: get(hObject,'String') returns contents of txtT as text
+%        str2double(get(hObject,'String')) returns contents of txtT as a double
+
+
+% --- Executes during object creation, after setting all properties.
+function txtT_CreateFcn(hObject, eventdata, handles)
+% hObject    handle to txtT (see GCBO)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    empty - handles not created until after all CreateFcns called
 
