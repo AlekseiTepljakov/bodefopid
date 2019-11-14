@@ -22,7 +22,7 @@ function varargout = bodefopid(varargin)
 
 % Edit the above text to modify the response to help bodefopid
 
-% Last Modified by GUIDE v2.5 14-Apr-2017 17:04:04
+% Last Modified by GUIDE v2.5 14-Nov-2019 13:30:01
 
 % Begin initialization code - DO NOT EDIT
 gui_Singleton = 1;
@@ -713,7 +713,7 @@ if ~isempty(G.ioDelay) && G.ioDelay > 0
     hasDelay = 1;
 end
 
-%% Check simulation type
+% Check simulation type
 simul = get(handles.menuSimulation, 'Value');
 
 history.G = G;
@@ -1301,6 +1301,17 @@ function btnOpenLoop_Callback(hObject, eventdata, handles)
 % eventdata  reserved - to be defined in a future version of MATLAB
 % handles    structure with handles and user data (see GUIDATA)
 
+% The transfer function
+K = str2double(get(handles.txtK, 'string'));
+p.K = K;
+[b,nb] = str2poly(get(handles.txtZ, 'string'), p);
+[a,na] = str2poly(get(handles.txtP, 'string'), p);
+G = fotf(a,na,b,nb);
+
+% Draw the requested figures
+h1 = figure; step(G);
+h2 = figure; bode(G); grid;
+
 
 % --- Executes on selection change in menuSimulation.
 function menuSimulation_Callback(hObject, eventdata, handles)
@@ -1410,3 +1421,75 @@ function txtT_CreateFcn(hObject, eventdata, handles)
 if ispc && isequal(get(hObject,'BackgroundColor'), get(0,'defaultUicontrolBackgroundColor'))
     set(hObject,'BackgroundColor','white');
 end
+
+
+% --------------------------------------------------------------------
+function menuFile_Callback(hObject, eventdata, handles)
+% hObject    handle to menuFile (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+
+
+% --------------------------------------------------------------------
+function menuExportOptimConfig_Callback(hObject, eventdata, handles)
+% hObject    handle to menuExportOptimConfig (see GCBO)
+% eventdata  reserved - to be defined in a future version of MATLAB
+% handles    structure with handles and user data (see GUIDATA)
+
+[filename,path] = uiputfile('*.mat');
+if ~isequal(filename, 0) && ~isequal(path, 0)
+    
+    % Check file extension, add if necessary
+    if ~strcmpi(filename(end-2:end),'mat')
+        filename = [filename '.mat'];
+    end
+    
+    % Load default asset
+    config_struct_default = load(['assets' filesep 'initial_control.mat']);
+    
+    % Get the structure out
+    fcfg = config_struct_default.FPID_Optimizer_GUI_config;
+    
+    % Create the file
+    config_struct = matfile([path filename], 'Writable', true);
+    
+    % Store the params
+    fcfg.FPIDParams.Kp = get(handles.txtKp, 'string');
+    fcfg.FPIDParams.Ki = get(handles.txtKi, 'string');
+    fcfg.FPIDParams.Kd = get(handles.txtKd, 'string');
+    fcfg.FPIDParams.Lam = get(handles.txtLam, 'string');
+    fcfg.FPIDParams.Mu = get(handles.txtMu, 'string');
+    
+    % Min-max values of gains
+    fcfg.FPIDParams.KpMin = get(handles.txtMinKp, 'String');
+    fcfg.FPIDParams.KpMax = get(handles.txtMaxKp, 'String');
+    fcfg.FPIDParams.KiMin = get(handles.txtMinKi, 'String');
+    fcfg.FPIDParams.KiMax = get(handles.txtMaxKi, 'String');
+    fcfg.FPIDParams.KdMin = get(handles.txtMinKd, 'String');
+    fcfg.FPIDParams.KdMax = get(handles.txtMaxKd, 'String');
+
+    % Fixed min-max values
+    fcfg.FPIDParams.LamMin = '0';
+    fcfg.FPIDParams.LamMax = '1';
+    fcfg.FPIDParams.MuMin = '0';
+    fcfg.FPIDParams.MuMax = '1';
+    
+    % Get the approximation parameters
+    approxType = get(handles.menuSimulation, 'Value');
+    if (approxType == 1)
+        warndlg(['FPID_OPTIM config only supports Oustaloup ' ...
+                 'approximation based simulation. ' ...
+                 'Will use regular Oustaloup filter.']);
+    elseif (approxType > 1)
+        approxType = approxType - 1;
+    end
+    
+    fcfg.PlantModel.ApproxType = approxType;
+    fcfg.PlantModel.ApproxFreqRange = get(handles.txtW, 'String');
+    fcfg.PlantModel.ApproxOrder = get(handles.txtN, 'String');
+    
+    % Save the structure
+    config_struct.FPID_Optimizer_GUI_config = fcfg;
+    
+end
+
